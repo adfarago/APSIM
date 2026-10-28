@@ -1,0 +1,52 @@
+# Build a Shinylive website and publish it to GitHub Pages.
+# The source files (app.py, cases.py, etc.) must be in the repository root.
+name: Deploy APSIM to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download the repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # Use the same Shinylive version as the successful local export.
+      - name: Install the Shinylive exporter
+        run: python -m pip install shinylive==0.8.12
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      # Export outside the repository so output cannot be read as input.
+      - name: Export the application
+        run: shinylive export . "$RUNNER_TEMP/apsim-site"
+
+      - name: Upload the website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/apsim-site
+
+      - name: Publish to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
