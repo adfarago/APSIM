@@ -7,6 +7,7 @@ the interface; publishing the app with Shinylive and GitHub Pages is a later ste
 ## Files
 
 - `cases.py`: Case 1 and Case 2 assumptions.
+- `case_editor.py`: conversion and validation for editable case inputs.
 - `simulation.py`: trading procedures, financial calculations and tables.
 - `app.py`: the Shiny interface, including controls, tables and charts.
 - `main.py`: case selection, printing and plots.
@@ -23,6 +24,16 @@ the `market_simulator` folder and run:
 
 Open http://127.0.0.1:8000/ in a browser. Choose a case and click **Run
 simulation**. To compare both cases, change the selector and click Run again.
+While a simulation is running, **Stop Simulation** cancels it without showing
+partial results. The Run and Modify buttons are unavailable until it finishes
+or stops, and the case input tables are locked without losing existing edits.
+The app shows elapsed time and automatically stops without results
+if the complete run exceeds two minutes, including state-claim trading.
+To change assumptions, choose a case and click **Modify Case**. Double-click
+cells in the three input tables and press Enter to save each edit, then click
+**Run simulation**. Investor names must match across both investor tables.
+Clicking **Modify Case** again reloads the selected case and discards edits.
+The edits are temporary and are not saved when the page is reloaded.
 Select **Trade state claims after equilibrium** and run again to see the
 additional tables in the State-claim trading tab. Changing decimal places
 updates tables without rerunning the model. Press Ctrl+C in the terminal to stop
@@ -55,7 +66,23 @@ Use `--no-plots` to suppress figure windows. Close the figure windows to return
 to the terminal. Rounding affects the displayed values, not the calculations.
 
 The algorithm follows the live script's grid search and stopping criteria.
-It excludes grid candidates that would produce non-positive consumption, and
-recomputes prices after the final trade if the iteration limit is reached.
+It excludes grid candidates outside the selected utility function's domain.
+The default stopping limit is two minutes rather than a fixed number of trades.
+Utility gains are calculated directly to preserve accuracy for small trades.
+After 30 seconds of total runtime, the convergence tolerance may increase by
+at most 50%; the app reports when this relaxed tolerance was needed.
 The project owner has compared the translated results with MATLAB. Further
 changes to the model should be checked against the original results again.
+
+Each investor's utility parameter row is `[type, parameter 1, parameter 2]`.
+The model supports the revised MATLAB utility types: 1 (quadratic), 2 (CRRA),
+and 4 (DRRA). Types 2 and 4 require positive consumption relative to
+their respective zero or shift. Their utility parameter 1 must be greater
+than 0 and at most 10, excluding 1 because the utility formula is undefined
+there. Security payoffs must be non-negative. Both built-in cases use type 2.
+
+Run the utility and simulation checks from this folder with:
+
+```powershell
+..\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```

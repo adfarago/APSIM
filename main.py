@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd
 
 from cases import get_case
-from simulation import build_results, simulate_equilibrium, state_claim_tables
+from simulation import (MAX_RUNTIME_SECONDS, SimulationTimeout, build_results,
+                        simulate_equilibrium, state_claim_tables)
 
 
 def show_tables(tables, digits):
@@ -25,6 +26,8 @@ def status(result):
     description = "converged" if result.converged else "maximum number of trades reached"
     print(f"{description}; iterations: {result.iterations}; "
           f"maximum reservation-price deviation: {result.max_price_deviation:.8g}")
+    if result.tolerance_relaxed:
+        print(f"Slightly relaxed convergence tolerance used: {result.tolerance_used:g}")
 
 
 def show_figures(case, data):
@@ -73,7 +76,9 @@ def main():
     case = get_case(args.case)
     print(f"\nCase {args.case}: simulating equilibrium...")
     start = time.perf_counter()
-    result = simulate_equilibrium(case)
+    started_at = time.monotonic()
+    deadline = started_at + MAX_RUNTIME_SECONDS
+    result = simulate_equilibrium(case, deadline=deadline, started_at=started_at)
     print(f"Elapsed time: {time.perf_counter() - start:.2f} seconds")
     status(result)
     tables, figure_data = build_results(case, result)
@@ -82,7 +87,7 @@ def main():
         if args.state_claims:
             print("\nSimulating further trading with state claims...")
             start = time.perf_counter()
-            second = simulate_equilibrium(case, result.holdings, trade_state_claims=True)
+            second = simulate_equilibrium(case, result.holdings, trade_state_claims=True, deadline=deadline, started_at=started_at)
             print(f"Elapsed time: {time.perf_counter() - start:.2f} seconds")
             status(second)
             show_tables(state_claim_tables(case, second), args.digits)
@@ -91,4 +96,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SimulationTimeout:
+        print("No convergence: the maximum run time of 2 minutes was reached.")

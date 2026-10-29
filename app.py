@@ -5,14 +5,17 @@ used by main.py. This file only handles user input and presentation. It can be
 run locally with Shiny and, in a later step, exported for Shinylive.
 """
 
+import asyncio
 import time
 
 import matplotlib.pyplot as plt
 import numpy as np
-from shiny import App, reactive, render, ui
+from shiny import App, reactive, render, req, ui
 
 from cases import get_case
-from simulation import build_results, simulate_equilibrium, state_claim_tables
+from case_editor import case_from_tables, case_to_tables
+from simulation import (MAX_RUNTIME_SECONDS, SimulationTimeout, build_results,
+                        check_deadline, simulate_equilibrium_async, state_claim_tables)
 
 
 # Organise the original MATLAB output into small, readable sections. The strings
@@ -49,13 +52,34 @@ app_ui = ui.page_fluid(
         .table-scroll table { margin-bottom: 0; white-space: nowrap; }
         .table-scroll table th, .table-scroll table td { text-align: center; }
         .table-scroll table tr > :first-child { text-align: left; }
+        shiny-data-frame .shiny-data-grid > table > thead > tr > th,
+        shiny-data-frame .shiny-data-grid > table > tbody > tr > td { text-align: center; }
+        shiny-data-frame .shiny-data-grid > table > thead > tr > th:first-child,
+        shiny-data-frame .shiny-data-grid > table > tbody > tr > td:first-child { text-align: left; }
         .result-status { margin: 1rem 0; }
         .hint { color: #52647a; }
+        .case-editor-grid[inert] { opacity: 0.6; }
+    """),
+    # Keep the existing grids mounted: rebuilding them on each status change
+    # would discard cell edits. The Stop button exists exactly while running.
+    # `inert` blocks both mouse and keyboard interaction without changing data.
+    ui.tags.script("""
+        document.addEventListener('DOMContentLoaded', () => {
+            const syncCaseEditorLock = () => {
+                const running = document.getElementById('stop') !== null;
+                document.querySelectorAll('.case-editor-grid').forEach((grid) => {
+                    if (grid.inert !== running) grid.inert = running;
+                });
+            };
+            new MutationObserver(syncCaseEditorLock).observe(document.body, {
+                childList: true, subtree: true
+            });
+            syncCaseEditorLock();
+        });
     """),
     ui.div(
         ui.h1("APSIM (Asset Pricing Simulator)"),
-        ui.p("Explore how investors trade assets and how equilibrium prices, "
-             "consumption and returns emerge."),
+        ui.p('This is an implementation of the APSIM from the book "Investors and Markets" by William F. Sharpe'),
         class_="app-heading",
     ),
     ui.div(
@@ -66,8 +90,10 @@ app_ui = ui.page_fluid(
             col_widths=(4, 4, 4),
         ),
         ui.input_action_button("run", "Run simulation", class_="btn-primary"),
-        ui.p("Choose a case and trading option, then select Run simulation. "
-             "Decimal places can be changed afterwards.", class_="hint mt-2 mb-0"),
+        ui.input_action_button("modify", "Modify Case", class_="btn-outline-primary ms-2"),
+        ui.div(ui.output_ui("stop_control"), style="display: inline-block;"),
+        ui.p("Select Modify Case to load editable inputs, or run the selected built-in case directly. "
+             "After editing a cell, press Enter or click outside it before running.", class_="hint mt-2 mb-0"),
         class_="control-panel",
     ),
     ui.output_ui("status"),
@@ -81,9 +107,8 @@ app_ui = ui.page_fluid(
                      ui.h3("Pricing Kernel & Market Return", class_="mt-4"),
                      ui.output_plot("pricing_kernel", height="380px")),
         ui.nav_panel("State-claim trading", ui.output_ui("claims_tables")),
+        id="results_tabs",
     ),
-    ui.p("Results are calculated from the assumptions of the selected case.",
-         class_="hint mt-4"),
     title="APSIM (Asset Pricing Simulator)",
 )
 
@@ -104,50 +129,225 @@ def table_cards(tables, titles, digits):
 
 
 def server(input, output, session):
-    # The event decorator makes a snapshot when Run is clicked. Selecting a new
-    # case or changing the checkbox alone does not silently replace old results.
-    # Changing decimal places only affects presentation, so it does not rerun
-    # the simulation. An unclicked button has value zero and produces no result.
-    @reactive.calc
-    @reactive.event(input.run)
-    def calculation():
-        case_number = int(input.case())
-        wants_claims = bool(input.state_claims())
-        case = get_case(case_number)
-        started = time.perf_counter()
-        equilibrium = simulate_equilibrium(case)
-        tables, figures = build_results(case, equilibrium)
+    # A separate copy of the selected built-in case is loaded into the grids.
+    # Edits and results belong to this browser session only.
+    editable_case = reactive.value(None)
+    editing_number = reactive.value(None)
+    result_value = reactive.value(None)
+    stopped = reactive.value(False)
+    timed_out = reactive.value(False)
+    started_at = reactive.value(None)
+
+    @reactive.extended_task
+    async def simulate_task(case_number, case, wants_claims, edited, started):
+        # Yield before beginning so the running controls reach the browser.
+        await asyncio.sleep(0.01)
+        deadline = started + MAX_RUNTIME_SECONDS
+        equilibrium = await simulate_equilibrium_async(case, deadline=deadline, started_at=started)
+        check_deadline(deadline)
+        with np.errstate(divide="raise", invalid="raise", over="raise"):
+            tables, figures = build_results(case, equilibrium)
         claims = None
         claims_results = None
         if wants_claims:
-            claims = simulate_equilibrium(case, equilibrium.holdings, trade_state_claims=True)
-            claims_results = state_claim_tables(case, claims)
+            claims = await simulate_equilibrium_async(case, equilibrium.holdings, trade_state_claims=True, deadline=deadline, started_at=started)
+            with np.errstate(divide="raise", invalid="raise", over="raise"):
+                claims_results = state_claim_tables(case, claims)
+        check_deadline(deadline)
         return {
             "case_number": case_number, "case": case, "equilibrium": equilibrium,
             "tables": tables, "figures": figures, "claims": claims,
-            "claims_tables": claims_results, "elapsed": time.perf_counter() - started,
+            "claims_tables": claims_results, "elapsed": time.monotonic() - started,
+            "edited": edited,
         }
+
+    session.on_ended(simulate_task.cancel)
+
+    @reactive.effect
+    def update_run_controls():
+        running = simulate_task.status() == "running"
+        ui.update_action_button("run", disabled=running)
+        ui.update_action_button("modify", disabled=running)
+
+    @render.ui
+    def stop_control():
+        if simulate_task.status() == "running":
+            return ui.input_action_button("stop", "Stop Simulation", class_="btn-outline-danger ms-2")
+        return None
+
+    @reactive.effect
+    @reactive.event(input.stop)
+    def stop_simulation():
+        if simulate_task.status() == "running":
+            if time.monotonic() - started_at.get() >= MAX_RUNTIME_SECONDS:
+                timed_out.set(True)
+            else:
+                stopped.set(True)
+            result_value.set(None)
+            simulate_task.cancel()
+
+    @reactive.effect
+    def collect_simulation():
+        state = simulate_task.status()
+        if state == "success":
+            result_value.set(simulate_task.result())
+        elif state == "error":
+            result_value.set(None)
+            error = simulate_task.error()
+            if isinstance(error, SimulationTimeout):
+                timed_out.set(True)
+            else:
+                message = str(error) if isinstance(error, ValueError) else "The inputs produced an undefined numerical result. Please check the case assumptions."
+                ui.notification_show(message, type="error", duration=None)
+                ui.update_navs("results_tabs", selected="Case inputs")
+
+    @reactive.effect
+    @reactive.event(input.modify)
+    def load_inputs():
+        if simulate_task.status() == "running":
+            return
+        editable_case.set(get_case(int(input.case())))
+        editing_number.set(int(input.case()))
+        result_value.set(None)
+        stopped.set(False)
+        timed_out.set(False)
+        ui.update_navs("results_tabs", selected="Case inputs")
+
+    @reactive.calc
+    def edit_tables():
+        case = editable_case.get()
+        if case is None:
+            return None
+        return case_to_tables(case)
+
+    @render.data_frame
+    def edit_payoffs():
+        tables = edit_tables()
+        if tables is None:
+            return None
+        return render.DataGrid(tables[0], editable=True, width="100%", summary=False)
+
+    @render.data_frame
+    def edit_portfolios():
+        tables = edit_tables()
+        if tables is None:
+            return None
+        return render.DataGrid(tables[1], editable=True, width="100%", summary=False)
+
+    @render.data_frame
+    def edit_preferences():
+        tables = edit_tables()
+        if tables is None:
+            return None
+        return render.DataGrid(tables[2], editable=True, width="100%", summary=False)
+
+    def parse_edit(*, patch):
+        # Editable-grid values arrive as text. Convert numeric columns before
+        # applying a patch so they remain compatible with pandas numeric types.
+        # Also reject edits server-side in case a request arrives during a run.
+        with reactive.isolate():
+            if simulate_task.status() == "running":
+                raise ValueError("Case inputs cannot be edited while a simulation is running.")
+        if patch["column_index"] == 0:
+            return str(patch["value"])
+        try:
+            value = float(patch["value"])
+            if not np.isfinite(value):
+                raise ValueError
+            return value
+        except (TypeError, ValueError):
+            ui.notification_show("Enter a finite number in this cell.", type="error", duration=8)
+            raise ValueError("Enter a finite number in this cell.") from None
+
+    edit_payoffs.set_patch_fn(parse_edit)
+    edit_portfolios.set_patch_fn(parse_edit)
+    edit_preferences.set_patch_fn(parse_edit)
+
+    # Track which case the editor contains. Changing the dropdown alone must
+    # never apply a Case 1 edit to Case 2 or silently discard those edits.
+    @reactive.effect
+    @reactive.event(input.run)
+    def run_simulation():
+        if simulate_task.status() == "running":
+            return
+        case_number = int(input.case())
+        base = editable_case.get()
+        if base is not None and editing_number.get() != case_number:
+            ui.notification_show("Select Modify Case to load the newly selected case before running it.",
+                                 type="warning", duration=None)
+            return
+        try:
+            if base is None:
+                case = get_case(case_number)
+            else:
+                case = case_from_tables(base, edit_payoffs.data_patched(),
+                                        edit_portfolios.data_patched(), edit_preferences.data_patched())
+            stopped.set(False)
+            timed_out.set(False)
+            result_value.set(None)
+            started = time.monotonic()
+            started_at.set(started)
+            simulate_task.invoke(case_number, case, bool(input.state_claims()), base is not None, started)
+        except (ValueError, FloatingPointError, OverflowError) as error:
+            result_value.set(None)
+            message = str(error) if isinstance(error, ValueError) else "The inputs produced an undefined numerical result. Please check the case assumptions."
+            ui.notification_show(message, type="error", duration=None)
+            ui.update_navs("results_tabs", selected="Case inputs")
+
+    def calculation():
+        return req(result_value.get())
 
     @render.ui
     def status():
-        # Before the first click reactive.event keeps all result outputs empty.
+        if simulate_task.status() == "running":
+            reactive.invalidate_later(1)
+            elapsed = min(int(time.monotonic() - started_at.get()), MAX_RUNTIME_SECONDS)
+            return ui.div(f"Simulating… {elapsed} seconds (maximum run time: 2 minutes).",
+                          class_="alert alert-info result-status", role="status")
+        if timed_out.get():
+            return ui.div("No convergence: the maximum run time of 2 minutes was reached.",
+                          class_="alert alert-warning result-status", role="status")
+        if stopped.get():
+            return ui.div("Simulation stopped.", class_="alert alert-warning result-status", role="status")
         result = calculation()
         eq = result["equilibrium"]
         label = "Converged" if eq.converged else "Trade limit reached before convergence"
         colour = "alert-success" if eq.converged else "alert-warning"
-        parts = [f"Case {result['case_number']}: {label}. ",
-                 f"Asset iterations: {eq.iterations}; calculation time: {result['elapsed']:.2f} seconds."]
+        description = " (modified inputs)" if result["edited"] else ""
+        parts = [f"Case {result['case_number']}{description}: {label}. ",
+                 f"Calculation time: {result['elapsed']:.2f} seconds."]
+        if eq.tolerance_relaxed:
+            parts.append(f" Asset trading used a slightly relaxed convergence tolerance ({eq.tolerance_used:g}).")
         if result["claims"] is not None:
             claims = result["claims"]
             claim_status = "converged" if claims.converged else "trade limit reached before convergence"
-            parts.append(f" State-claim trading: {claim_status} ({claims.iterations} iterations).")
+            parts.append(f" State-claim trading: {claim_status}.")
+            if claims.tolerance_relaxed:
+                parts.append(f" State-claim trading used a slightly relaxed convergence tolerance ({claims.tolerance_used:g}).")
             if not claims.converged:
                 colour = "alert-warning"
         return ui.div(*parts, class_=f"alert {colour} result-status", role="status")
 
     @render.ui
     def inputs_tables():
-        return table_cards(calculation()["tables"], INPUT_TABLES, input.digits())
+        base = editable_case.get()
+        if base is not None:
+            return ui.TagList(
+                ui.p(f"Editing Case {editing_number.get()}. Double-click a cell to change it. "
+                     "The tables use full precision; market totals are calculated automatically. "
+                     "Click Modify Case again to reload the selected case.", class_="hint mt-3"),
+                ui.div(ui.h3("State probabilities and asset payoffs"), ui.div(ui.output_data_frame("edit_payoffs"), class_="case-editor-grid"), class_="result-table"),
+                ui.div(ui.h3("Initial portfolios"), ui.div(ui.output_data_frame("edit_portfolios"), class_="case-editor-grid"), class_="result-table"),
+                ui.div(ui.h3("Investor preferences"),
+                       ui.p("Investor names and order must match the initial portfolios table. "
+                            "Utility types: 1 = quadratic, 2 = CRRA, 4 = DRRA.", class_="hint"),
+                       ui.div(ui.output_data_frame("edit_preferences"), class_="case-editor-grid"), class_="result-table"),
+            )
+        result = result_value.get()
+        if result is None:
+            return ui.p("Click Modify Case to load and edit the selected case, "
+                        "or run it directly to view its inputs.", class_="hint mt-4")
+        return table_cards(result["tables"], INPUT_TABLES, input.digits())
 
     @render.ui
     def equilibrium_tables():
