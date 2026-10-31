@@ -1,12 +1,12 @@
 # Financial market simulator
 
-This project translates the two built-in cases in the MATLAB live script.
+This project translates built-in cases from the MATLAB live script.
 The Shiny app runs locally in a browser. The calculation code is separate from
 the interface; publishing the app with Shinylive and GitHub Pages is a later step.
 
 ## Files
 
-- `cases.py`: Case 1 and Case 2 assumptions.
+- `cases.py`: assumptions for Cases 1, 2, 3 and 6.
 - `case_editor.py`: conversion and validation for editable case inputs.
 - `simulation.py`: trading procedures, financial calculations and tables.
 - `app.py`: the Shiny interface, including controls, tables and charts.
@@ -29,10 +29,21 @@ partial results. The Run and Modify buttons are unavailable until it finishes
 or stops, and the case input tables are locked without losing existing edits.
 The app shows elapsed time and automatically stops without results
 if the complete run exceeds two minutes, including state-claim trading.
-To change assumptions, choose a case and click **Modify Case**. Double-click
-cells in the three input tables and press Enter to save each edit, then click
-**Run simulation**. Investor names must match across both investor tables.
-Clicking **Modify Case** again reloads the selected case and discards edits.
+To change assumptions, choose a case and click **Load Case**. Edit the input
+tables and then click **Run simulation**. Investor names are edited in the
+portfolio table and mirrored in the preferences table. Asset names can be edited in the payoff table header and are
+mirrored in the portfolio table. Click **Add Asset** to add up to six assets;
+the new asset starts with zero payoffs and holdings. **Add State** adds up to
+ten states, with a zero probability and zero payoffs initially. Before running,
+give every state a positive probability, make probabilities sum to one, and
+ensure investors have valid consumption in each state. **Add Investor** adds a
+new investor with the displayed default holdings and preferences, up to five
+investors. The corresponding **Remove Last** buttons remove the last asset,
+state or investor. At least one asset, two states and two investors must remain.
+After removing a state, adjust probabilities to sum to one before running.
+A dash in the results
+indicates an undefined value, for example the return on a zero-price asset.
+Clicking **Load Case** again reloads the selected case and discards edits.
 The edits are temporary and are not saved when the page is reloaded.
 Select **Trade state claims after equilibrium** and run again to see the
 additional tables in the State-claim trading tab. Changing decimal places

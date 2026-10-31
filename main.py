@@ -33,9 +33,11 @@ def status(result):
 def show_figures(case, data):
     """Recreate the two figures in the MATLAB live script."""
     fig, ax = plt.subplots()
-    markers = ["o", "s", "D"]
+    markers = ["o", "s", "D", "^", "v"]
     for i, label in enumerate(case.asset_labels):
-        ax.plot(data["beta"][i], data["expected"][i], marker=markers[i],
+        if not np.isfinite(data["beta"][i]) or not np.isfinite(data["expected"][i]):
+            continue
+        ax.plot(data["beta"][i], data["expected"][i], marker=markers[i % len(markers)],
                 linestyle="none", markersize=7, label=label)
     # Include zero, like the original code, then draw the security market line.
     left, right = ax.get_xlim()
@@ -57,8 +59,8 @@ def show_figures(case, data):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Simulate MATLAB Case 1 or Case 2.")
-    parser.add_argument("--case", type=int, choices=[1, 2], help="Built-in case (1 or 2)")
+    parser = argparse.ArgumentParser(description="Simulate a built-in case.")
+    parser.add_argument("--case", type=int, choices=[1, 2, 3, 6], help="Built-in case (1, 2, 3 or 6)")
     parser.add_argument("--digits", type=int, choices=range(5), default=2,
                         help="Decimal places in tables (0 to 4; default 2)")
     parser.add_argument("--state-claims", action="store_true",
@@ -67,11 +69,11 @@ def main():
     args = parser.parse_args()
     if args.case is None:
         while True:
-            choice = input("Choose a case (1 or 2): ").strip()
-            if choice in ("1", "2"):
+            choice = input("Choose a case (1, 2, 3 or 6): ").strip()
+            if choice in ("1", "2", "3", "6"):
                 args.case = int(choice)
                 break
-            print("Please enter 1 or 2.")
+            print("Please enter 1, 2, 3 or 6.")
 
     case = get_case(args.case)
     print(f"\nCase {args.case}: simulating equilibrium...")

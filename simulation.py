@@ -305,7 +305,10 @@ def build_results(case: Case, result: TradingResult):
     # Rows of C correspond to investors, columns to states.
     c0, c = h[:, 0], h[:, 1:] @ x.T
     market_prices = p.mean(axis=0)
-    returns = (x / market_prices).T
+    # A newly added asset can have zero payoffs and thus a zero price. Its
+    # gross return 0/0 is undefined, not a reason to discard the whole case.
+    returns = np.divide(x, market_prices, out=np.full_like(x, np.nan),
+                        where=market_prices != 0).T
     market_holdings = case.holdings[:, 1:].sum(axis=0)
     market_return = (x @ market_holdings) / (market_holdings @ market_prices)
     all_returns = np.vstack((returns, market_return))
