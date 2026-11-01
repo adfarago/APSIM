@@ -6,11 +6,12 @@ investors and displays equilibrium prices, consumption and returns.
 
 ## Files
 
-Keep these six files together in the same project folder as this README:
+Keep these seven files together in the same project folder as this README:
 
 - `cases.py`: assumptions for Cases 1, 2, 3 and 6.
 - `case_editor.py`: conversion and validation for editable case inputs.
 - `simulation.py`: trading procedures, financial calculations and tables.
+- `export_results.py`: exports simulation tables to a CSV file.
 - `app.py`: the Shiny interface, including controls, tables and charts.
 - `main.py`: command-line case selection, output and plots.
 - `requirements.txt`: Python packages needed to run the program.
@@ -26,7 +27,7 @@ connection to download Python and the packages during setup.
 1. Install Python 3.12 or 3.13 from [python.org](https://www.python.org/downloads/)
    if it is not already installed. On Windows, select **Add Python to PATH** in
    the installer. Then open a new PowerShell window.
-2. Create a project folder and put the six files listed above and this README
+2. Create a project folder and put the seven files listed above and this README
    in it. In PowerShell, change to that folder, replacing the example path with
    your own:
 
@@ -85,6 +86,13 @@ Select **Trade state claims after equilibrium** before running to see additional
 results in the State-claim trading tab. Changing the number of decimal places
 updates tables without rerunning the simulation. A dash indicates an undefined
 value, such as the return on a zero-price asset.
+
+After a successful run, click **Export to CSV** to export all result tables.
+When the app runs locally, it saves `apsim_results.csv` in the project folder;
+a later export replaces that file. In the browser-only website, the button
+downloads the CSV instead. Your browser settings determine where it is saved
+and whether you are prompted to choose a location. The CSV uses the selected
+number of decimal places and includes state-claim tables when that stage was run.
 
 While a simulation runs, the case inputs and the Run simulation and Load Case
 buttons are disabled. **Stop Simulation** stops the run without displaying

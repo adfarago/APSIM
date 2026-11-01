@@ -6,6 +6,7 @@ run locally with Shiny and, in a later step, exported for Shinylive.
 """
 
 import asyncio
+import sys
 import time
 
 from matplotlib.figure import Figure
@@ -17,25 +18,11 @@ from case_editor import (add_asset_to_draft, add_investor_to_draft,
                          add_state_to_draft, case_to_draft, draft_to_case,
                          remove_last_asset_from_draft, remove_last_investor_from_draft,
                          remove_last_state_from_draft)
+from export_results import (EQUILIBRIUM_TABLES, INPUT_TABLES, STATE_TABLES,
+                            export_results, results_csv)
 from simulation import (MAX_RUNTIME_SECONDS, SimulationTimeout, build_results,
                         check_deadline, simulate_equilibrium_async, state_claim_tables)
 
-
-# Organise the original MATLAB output into small, readable sections. The strings
-# are the keys returned by build_results() and state_claim_tables().
-INPUT_TABLES = [
-    "State probabilities and asset payoffs", "Initial portfolios",
-    "Investor preferences",
-]
-EQUILIBRIUM_TABLES = [
-    "Equilibrium portfolios", "Equilibrium consumption levels",
-    "Equilibrium reservation prices of assets", "Equilibrium asset returns",
-    "Equilibrium asset characteristics", "Portfolio weights",
-]
-STATE_TABLES = [
-    "Equilibrium reservation prices of state claims",
-    "Equilibrium price per chance (PPC)",
-]
 
 # Keeping the styling here makes the first app easy to move and customise.
 # The numerical calculations are unaffected by the choice of colours or layout.
@@ -133,6 +120,7 @@ app_ui = ui.page_fluid(
         ),
         ui.input_action_button("run", "Run simulation", class_="btn-primary"),
         ui.input_action_button("modify", "Load Case", class_="btn-outline-primary ms-2"),
+        ui.div(ui.output_ui("export_control"), style="display: inline-block;"),
         ui.div(ui.output_ui("stop_control"), style="display: inline-block;"),
         ui.p("Select Load Case to load editable inputs, or run the selected built-in case directly. "
              "After editing a cell, press Enter or click outside it before running.", class_="hint mt-2 mb-0"),
@@ -290,6 +278,37 @@ def server(input, output, session):
         if simulate_task.status() == "running":
             return ui.input_action_button("stop", "Stop Simulation", class_="btn-outline-danger ms-2")
         return None
+
+    @render.ui
+    def export_control():
+        result = result_value.get()
+        if (result is not None and simulate_task.status() != "running"
+                and result["equilibrium"].converged
+                and (result["claims"] is None or result["claims"].converged)):
+            if sys.platform == "emscripten":
+                return ui.download_button("download_csv", "Export to CSV", class_="btn-outline-primary ms-2")
+            return ui.input_action_button("export_csv", "Export to CSV", class_="btn-outline-primary ms-2")
+        return None
+
+    @render.download(filename="apsim_results.csv", media_type="text/csv")
+    def download_csv():
+        result = req(result_value.get())
+        req(simulate_task.status() != "running" and result["equilibrium"].converged
+            and (result["claims"] is None or result["claims"].converged))
+        # Include the UTF-8 byte-order mark used by the local CSV for Excel.
+        yield results_csv(result, input.digits()).encode("utf-8-sig")
+
+    @reactive.effect
+    @reactive.event(input.export_csv, ignore_init=True)
+    def save_results():
+        result = result_value.get()
+        if result is None or simulate_task.status() == "running":
+            return
+        try:
+            path = export_results(result, input.digits())
+            ui.notification_show(f"Results saved to {path}", type="message", duration=8)
+        except (OSError, ValueError) as error:
+            ui.notification_show(f"Could not save results: {error}", type="error", duration=None)
 
     @reactive.effect
     @reactive.event(input.stop)
